@@ -1,0 +1,34 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  sms_create_user
+
+  Sample SAM Template for sms_create_user
+
+Globals:
+  Function:
+    Timeout: 3
+    MemorySize: 128
+    Tracing: Active
+    LoggingConfig:
+      LogFormat: JSON
+
+Resources:
+  SmsCreateFunction:  # Renamed from HelloWorldFunction to SmsHandleInboundFunction
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: handle_sms_create/
+      Handler: app.lambda_handler
+      Runtime: python3.10
+      Architectures:
+        - x86_64
+
+Outputs:
+
+  SmsHandleInboundFunction:  # Renamed from HelloWorldFunction to SmsHandleInboundFunction
+    Description: "SMS Handle Inbound Lambda Function ARN"
+    Value: !GetAtt SmsCreateFunction.Arn
+
+  SmsHandleInboundFunctionIamRole:  # Renamed from HelloWorldFunctionIamRole to SmsHandleInboundFunctionIamRole
+    Description: "Implicit IAM Role created for SMS Handle Inbound function"
+    Value: !GetAtt SmsCreateFunctionRole.Arn
