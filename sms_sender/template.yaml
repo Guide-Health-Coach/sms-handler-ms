@@ -1,0 +1,35 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  sms_sender
+
+  Sample SAM Template for sms_sender
+
+Globals:
+  Function:
+    Timeout: 3
+    MemorySize: 128
+
+    Tracing: Active
+    LoggingConfig:
+      LogFormat: JSON
+  Api:
+    TracingEnabled: true
+Resources:
+  SmsHandleOutboundFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: handle_sms_outbound/
+      Handler: app.lambda_handler
+      Runtime: python3.10
+      Architectures:
+      - x86_64
+      
+Outputs:
+  SmsHandleOutboundFunction:
+    Description: "SMS Handle Outbound Lambda Function ARN"
+    Value: !GetAtt SmsHandleOutboundFunction.Arn
+
+  SmsHandleOutboundFunctionIamRole:
+    Description: "Implicit IAM Role created for SMS Handle Outbound function"
+    Value: !GetAtt SmsHandleOutboundFunctionRole.Arn
