@@ -16,56 +16,79 @@ def lambda_handler(event, context):
         print("Error decoding JSON from event body")
         return {'statusCode': 400, 'body': json.dumps({'message': 'Invalid request body'})}
 
-    print(body)
-
     phone_number = '+1' + body.get('phoneNumber')
 
-    response = questionTable.get_item(
-        Key={
-            'question_number': 0
+    try:
+        user_response = userTable.get_item(Key={'phone_number': phone_number})
+        if 'Item' in user_response:
+            print(f"User with phone number {phone_number} already exists.")
+            return {
+                'statusCode': 200,
+                'body': json.dumps({'message': 'User already exists'})
+            }
+    except Exception as e:
+        print(f"Error accessing User table: {e}")
+        return {'statusCode': 500, 'body': json.dumps({'message': 'Error accessing User table'})}
+
+    try:
+        response = questionTable.get_item(Key={'question_number': 0})
+        question = response.get('Item')
+        if not question:
+            raise ValueError("Question not found")
+    except Exception as e:
+        print(f"Error fetching question from DB: {e}")
+        return {'statusCode': 500, 'body': json.dumps({'message': 'Error fetching question'})}
+
+    question_content = question.get('question_content', 'Sorry, an error has occurred.')
+
+    try:
+        user = {
+            'phone_number': phone_number,
+            'first_name': body.get('firstName'),
+            'opted_in': body.get('terms'),
+            'timezone': body.get('userTimezone'),
+            'created_at': datetime.now().isoformat(),
+            'question_number': 0,
+            'days_on_plan': 0,
+            'onboarding_status': 'In Progress',
+            'meal_plan_generated': False,
         }
-    )
-    question = response.get('Item', None)
-    question_content = question.get('question_content', 'Sorry, an error has occured.')
+        response = userTable.put_item(Item=user)
+    except Exception as e:
+        print(f"Error adding user to DB: {e}")
+        return {'statusCode': 500, 'body': json.dumps({'message': 'Error adding user'})}
 
-    data = json.dumps({"phoneNumber": phone_number, "message": question_content})
-    headers = {"Content-Type": "application/json"}
-    conn = http.client.HTTPSConnection("et8hcrv3lh.execute-api.us-east-2.amazonaws.com")
-    conn.request("POST", "/default/smsSender-SmsHandleOutboundFunction-c1mnlkMhXvty", body=data, headers=headers)
-    
-    response = conn.getresponse()
-    responseData = response.read().decode()
-    responseData = json.loads(responseData) 
-
-    print("Response from SMS API:", responseData)
-
-    conn.close()
-
-    user = {
-        'phone_number': '+1' + body.get('phoneNumber'),
-        'first_name': body.get('firstName'),
-        'opted_in': body.get('terms'),
-        'timezone': body.get('userTimezone'),
-        'created_at': datetime.now().isoformat(),
-        'question_number': 0
-    }
-
-    conversation = {
-        # TODO Later when more coaches/admins/other come onboard, make it phone_number + '_' + coach_id.
-        'conversation_id': phone_number,
-        'message': {
-            'from': 'telnyx',
-            'to': phone_number,
-            'message': question_content,
-            'timestamp': responseData.get('data', {}).get('received_at', datetime.now().isoformat())
+    try:
+        conversation = {
+            'conversation_id': phone_number,
+            'message': [{
+                'source': 'telnyx',
+                'to': phone_number,
+                'message_content': question_content, 
+            }]
         }
-    }
+        response = conversationTable.put_item(Item=conversation)
+    except Exception as e:
+        print(f"Error adding conversation to DB: {e}")
+        return {'statusCode': 500, 'body': json.dumps({'message': 'Error adding conversation'})}
 
-    response = userTable.put_item(Item=user)
-    response = conversationTable.put_item(Item=conversation)
+    try:
+        data = json.dumps({"phoneNumber": phone_number, "message": question_content})
+        headers = {"Content-Type": "application/json"}
+        conn = http.client.HTTPSConnection("et8hcrv3lh.execute-api.us-east-2.amazonaws.com")
+        conn.request("POST", "/default/smsSender-SmsHandleOutboundFunction-c1mnlkMhXvty", body=data, headers=headers)
+        
+        response = conn.getresponse()
+        responseData = response.read().decode()
+        responseData = json.loads(responseData)
+        conn.close()
+        if response.status != 200:
+            raise ValueError("SMS sending failed")
+    except Exception as e:
+        print(f"Error sending SMS: {e}")
+        return {'statusCode': 500, 'body': json.dumps({'message': 'Error sending SMS'})}
 
     return {
         "statusCode": 200,
-        "body": json.dumps({
-        }),
+        "body": json.dumps({'message': 'Operation successful'}),
     }
