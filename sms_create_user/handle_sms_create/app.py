@@ -51,7 +51,8 @@ def lambda_handler(event, context):
             'question_number': 0,
             'days_on_plan': 0,
             'onboarding_status': 'In Progress',
-            'meal_plan_generated': False,
+            'preliminary_meal_plan_generated': False,
+            'approved_meal_plan_generated': False,
         }
         response = userTable.put_item(Item=user)
     except Exception as e:
