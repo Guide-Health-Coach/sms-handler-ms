@@ -76,13 +76,15 @@ def lambda_handler(event, context):
     try:
         data = json.dumps({"phoneNumber": phone_number, "message": question_content})
         headers = {"Content-Type": "application/json"}
-        conn = http.client.HTTPSConnection("et8hcrv3lh.execute-api.us-east-2.amazonaws.com")
+        conn = http.client.HTTPSConnection("aqwgmthqlk.execute-api.us-east-2.amazonaws.com")
         conn.request("POST", "/default/smsSender-SmsHandleOutboundFunction-c1mnlkMhXvty", body=data, headers=headers)
         
         response = conn.getresponse()
         responseData = response.read().decode()
-        responseData = json.loads(responseData)
+        print("Response sending message:", responseData)
+
         conn.close()
+
         if response.status != 200:
             raise ValueError("SMS sending failed")
     except Exception as e:

@@ -5,15 +5,17 @@ import http.client
 import urllib
 import boto3
 
+
 def lambda_handler(event, context):
     dynamodb = boto3.resource('dynamodb')
     userTable = dynamodb.Table('User')
     conversationTable = dynamodb.Table('Conversation')
     questionTable = dynamodb.Table('Question')
 
-    MAX_QUESTION_NUMBER = 3
+    CHAPTER_1_QUESTIONS = 7
+    CHAPTER_2_QUESTIONS = 15
 
-    # Helper Functions
+    # --- Helper Functions ---
     def append_message_to_conversation_db(phone_number, new_message_object):
         response = conversationTable.update_item(
             Key={'conversation_id': phone_number},
@@ -25,9 +27,13 @@ def lambda_handler(event, context):
         return response
 
     def get_user(phone_number):
+        print(f"Fetching user with phone_number: {phone_number}")  # Enhanced logging
         try:
             response = userTable.get_item(Key={'phone_number': phone_number})
-            return response.get('Item')
+            item = response.get('Item')
+            if not item:
+                print(f"No user found with phone_number: {phone_number}")
+            return item
         except Exception as e:
             print(f"Error fetching user from User table: {e}")
             return None
@@ -40,24 +46,54 @@ def lambda_handler(event, context):
             print(f"Error fetching user from User table: {e}")
             return None
 
+    def get_meal_plan(phone_number, meal_plan_type):
+        print("Requesting meal plan for:", phone_number)
+        data = json.dumps({"phone_number": phone_number, "meal_plan_type": meal_plan_type})
+        headers = {"Content-Type": "application/json"}
+        conn = http.client.HTTPSConnection("ww57rlfsei.execute-api.us-east-2.amazonaws.com")
+        try:
+            conn.request("POST", "/default/mealplan-MealPlanFunction-o765SZ4skYlJ", body=data, headers=headers)
+            response = conn.getresponse()
+            if response.status == 200:
+                responseData = response.read().decode()
+                responseJson = json.loads(responseData)
+
+                meal_plan = responseJson.get('meal_plan', 'No meal plan found')
+                print("Response getting meal plan:", responseData)
+                return meal_plan
+            else:
+                print("Failed to get meal plan:", response.status, response.reason)
+        finally:
+            conn.close()
+
     def send_message(phone_number, message):
         data = json.dumps({"phoneNumber": phone_number, "message": message})
         headers = {"Content-Type": "application/json"}
-        conn = http.client.HTTPSConnection("et8hcrv3lh.execute-api.us-east-2.amazonaws.com")
-        conn.request("POST", "/default/smsSender-SmsHandleOutboundFunction-c1mnlkMhXvty", body=data, headers=headers)
-        
-        response = conn.getresponse()
-        responseData = response.read().decode()
-        print("Response:", responseData)
+        conn = http.client.HTTPSConnection("aqwgmthqlk.execute-api.us-east-2.amazonaws.com")
+        try:
+            conn.request("POST", "/default/smsSender-SmsHandleOutboundFunction-c1mnlkMhXvty", body=data, headers=headers)
+            response = conn.getresponse()
+            if response.status == 200:
+                responseData = response.read().decode()
+                print("Response sending message:", responseData)
+            else:
+                print("Failed to send message:", response.status, response.reason)
+        finally:
+            conn.close()
 
-        conn.close()
     
-    # main()
-    if event.get('isBase64Encoded', False):
-        body = base64.b64decode(event['body']).decode('utf-8')
-    else:
-        body = event.get('body', '')
-        
+    # --- main() ---
+    user_agent = event['headers'].get('User-Agent')
+    if user_agent == 'telnyx-webhooks':
+        print("Message from Telnyx received; ignoring.")
+        return {
+            'statusCode': 200,
+            'body': 'Ignored Telnyx message'
+        }
+    print("Received event:", event)  # Log the raw event
+    is_base64_encoded = event.get('isBase64Encoded', False)
+    body = event.get('body', '')
+
     if not body:
         print("Empty body received")
         return {
@@ -65,19 +101,29 @@ def lambda_handler(event, context):
             'body': json.dumps({'message': 'Empty body received'})
         }
 
-    parsed_body = urllib.parse.parse_qs(body)
-    
-    parsed_body = {k: v[0] for k, v in parsed_body.items()}
+    try:
+        if is_base64_encoded:
+            body = base64.b64decode(body).decode('utf-8')
+    except Exception as e:
+        print(f"Error decoding base64 content: {e}")
+
+    try:
+        parsed_body = urllib.parse.parse_qs(body)
+        parsed_body = {k: v[0] for k, v in parsed_body.items()}
+    except Exception as e:
+        print(f"Error parsing form-urlencoded content: {e}")
+
     received_message = parsed_body.get('Body')
     phone_number = parsed_body.get('From')
-
+    
+    print(received_message)
+    print(phone_number)
     user = get_user(phone_number)
-    if user.get('onboarding_process') == 'Completed' and user.get('meal_plan_generated'):
-        # This means the user response is to meal plan reminder events.
-        print("Do something")
-    elif user.get('onboarding_process') == 'Completed' and not user.get('meal_plan_generated'):
-        # This means user response is in invalid while waiting for a meal plan to be created, send a fallback message here.
-        print("Do something")
+
+    if user.get('onboarding_status') == 'Completed' and user.get('approved_meal_plan_generated'):
+        # This means the user response is to meal plan reminder events or anything that's not onboarding related.
+        print("You completed the onboarding, and you have no current reminders!  Your start day is on Monday!")
+        print("You are now responding to reminder {'Breakfast'}")
     else:
         received_message_object = {
             'source': phone_number,
@@ -88,12 +134,44 @@ def lambda_handler(event, context):
 
         new_question_number = user.get('question_number') + 1
 
-        if new_question_number > MAX_QUESTION_NUMBER:
-            send_message(phone_number, "You have completed the onboarding process.")
+        if new_question_number > CHAPTER_1_QUESTIONS and not user.get('preliminary_meal_plan'):
+            meal_plan = get_meal_plan(phone_number, 'preliminary')
+            print(meal_plan)
+            send_message(phone_number, meal_plan)
+            userTable.update_item(
+                Key={'phone_number': phone_number},
+                UpdateExpression='SET question_number = :new_question_number',
+                ExpressionAttributeValues={':new_question_number': new_question_number},
+                ReturnValues='UPDATED_NEW'
+            )
+            userTable.update_item(
+                Key={'phone_number': phone_number},
+                UpdateExpression='SET preliminary_meal_plan_generated = :new_preliminary_meal_plan_generated',
+                ExpressionAttributeValues={':new_preliminary_meal_plan_generated': True},
+                ReturnValues='UPDATED_NEW'
+            )
             return {
                 'statusCode': 200,
                 'body': json.dumps({'message': 'Request processed successfully'})
             }
+
+        elif new_question_number > CHAPTER_2_QUESTIONS and not user.get('approved_meal_plan'):
+            send_message(phone_number, "This is the end of the demo.  Later we will have an approved meal plan from the last set of questions and also set reminders for users, with interactivity to also tailor their plan every week.  The user is going to be able to interact throughout the week by talking about what they liked, disliked, etc.")
+            # userTable.update_item(
+            #     Key={'phone_number': phone_number},
+            #     UpdateExpression='SET question_number = :new_question_number',
+            #     ExpressionAttributeValues={':new_question_number': new_question_number},
+            #     ReturnValues='UPDATED_NEW'
+            # )
+            # Generate New meal plan here.
+            # Send another message.
+            # Update the approved_meal_plan_generate to True
+            # set user onboarding_process to "completed"
+            return {
+                'statusCode': 200,
+                'body': json.dumps({'message': 'Request processed successfully'})
+            }
+
         else:
             question_item = get_question(new_question_number)
             question_content = question_item.get('question_content')
