@@ -5,6 +5,7 @@ import os
 def lambda_handler(event, context):
     TELNYX_API_KEY = os.environ.get('TELNYX_API_KEY')
     authorization_header = f"Bearer KEY{TELNYX_API_KEY}"
+    SLACK_WEBHOOK_URL = os.environ.get('SLACK_WEBHOOK_URL')
 
     try:
         body = json.loads(event.get('body', ''))
