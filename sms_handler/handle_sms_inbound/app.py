@@ -4,9 +4,12 @@ import base64
 import http.client
 import urllib
 import boto3
+import requests
 
 
 def lambda_handler(event, context):
+    SLACK_WEBHOOK_URL = os.environ.get('SLACK_WEBHOOK_URL')
+
     dynamodb = boto3.resource('dynamodb')
     userTable = dynamodb.Table('User')
     conversationTable = dynamodb.Table('Conversation')
@@ -27,7 +30,7 @@ def lambda_handler(event, context):
         return response
 
     def get_user(phone_number):
-        print(f"Fetching user with phone_number: {phone_number}")  # Enhanced logging
+        print(f"Fetching user with phone_number: {phone_number}")
         try:
             response = userTable.get_item(Key={'phone_number': phone_number})
             item = response.get('Item')
@@ -59,10 +62,12 @@ def lambda_handler(event, context):
                 responseJson = json.loads(responseData)
 
                 meal_plan = responseJson.get('meal_plan', 'No meal plan found')
-                print("Response getting meal plan:", responseData)
+
                 return meal_plan
             else:
                 print("Failed to get meal plan:", response.status, response.reason)
+                log_message_to_slack(f'Failed to get meal plan for {phone_number}: {response.status}, {response.reason}', 'Telnyx', phone_number, error=True)
+
         finally:
             conn.close()
 
@@ -78,10 +83,34 @@ def lambda_handler(event, context):
                 print("Response sending message:", responseData)
             else:
                 print("Failed to send message:", response.status, response.reason)
+                log_message_to_slack(f'Failed to send message to {phone_number}: {response.status}, {response.reason}', 'Telnyx', phone_number, error=True)
+
         finally:
             conn.close()
 
-    
+    def log_message_to_slack(message, source, to, mealplan=False, error=False):
+        webhook_url = SLACK_WEBHOOK_URL
+        if error:
+            data = {
+                'text': f'*ERROR* : {message}',
+            }
+            response = requests.post(webhook_url, json=data)
+            return response
+
+        base_text = f'*SUCCESS* : *Received From:* {source}, *Message:* "{message}"'
+        if mealplan:
+            data = {
+                'text': f'*SUCCESS* : Generated mealplan for {to}',
+            }
+        else:
+            data = {
+                'text': base_text,
+            }
+
+        response = requests.post(webhook_url, json=data)
+
+        return response
+
     # --- main() ---
     user_agent = event['headers'].get('User-Agent')
     if user_agent == 'telnyx-webhooks':
@@ -132,12 +161,15 @@ def lambda_handler(event, context):
         }
         append_message_to_conversation_db(phone_number, received_message_object)
 
+        log_message_to_slack(received_message, phone_number, 'Telnyx')
+
         new_question_number = user.get('question_number') + 1
 
-        if new_question_number > CHAPTER_1_QUESTIONS and not user.get('preliminary_meal_plan'):
+        if new_question_number > CHAPTER_1_QUESTIONS and not user.get('preliminary_meal_plan_generated'):
             meal_plan = get_meal_plan(phone_number, 'preliminary')
             print(meal_plan)
             send_message(phone_number, meal_plan)
+
             userTable.update_item(
                 Key={'phone_number': phone_number},
                 UpdateExpression='SET question_number = :new_question_number',
@@ -150,12 +182,15 @@ def lambda_handler(event, context):
                 ExpressionAttributeValues={':new_preliminary_meal_plan_generated': True},
                 ReturnValues='UPDATED_NEW'
             )
+
+            log_message_to_slack('', 'Telnyx', phone_number, mealplan=True)
+
             return {
                 'statusCode': 200,
                 'body': json.dumps({'message': 'Request processed successfully'})
             }
 
-        elif new_question_number > CHAPTER_2_QUESTIONS and not user.get('approved_meal_plan'):
+        elif new_question_number > CHAPTER_2_QUESTIONS and not user.get('approved_meal_plan_generated'):
             send_message(phone_number, "This is the end of the demo.  Later we will have an approved meal plan from the last set of questions and also set reminders for users, with interactivity to also tailor their plan every week.  The user is going to be able to interact throughout the week by talking about what they liked, disliked, etc.")
             # userTable.update_item(
             #     Key={'phone_number': phone_number},
