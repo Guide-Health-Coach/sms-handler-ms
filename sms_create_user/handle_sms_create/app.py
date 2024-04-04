@@ -2,13 +2,34 @@ import json
 import boto3
 from datetime import datetime
 import http.client
+import requests
+import os
 
 def lambda_handler(event, context):
-    dynamodb = boto3.resource('dynamodb')
+    SLACK_WEBHOOK_URL = os.environ.get('SLACK_WEBHOOK_URL')
 
+    dynamodb = boto3.resource('dynamodb')
     userTable = dynamodb.Table('User')
     questionTable = dynamodb.Table('Question')
     conversationTable = dynamodb.Table('Conversation')
+
+    def log_message_to_slack(phone_number, message, error=False):
+        webhook_url = SLACK_WEBHOOK_URL
+        if error:
+            data = {
+                'text': f'*Error:* {message}',
+            }
+            response = requests.post(webhook_url, json=data)
+            return response
+
+        base_text = f'{message}'
+        data = {
+            'text': base_text,
+        }
+
+        response = requests.post(webhook_url, json=data)
+
+        return response
 
     try:
         body = json.loads(event.get('body', '{}'))
@@ -22,6 +43,7 @@ def lambda_handler(event, context):
         user_response = userTable.get_item(Key={'phone_number': phone_number})
         if 'Item' in user_response:
             print(f"User with phone number {phone_number} already exists.")
+            log_message_to_slack(phone_number, f'{phone_number} tried signing in with pre-existing number.', error=True)
             return {
                 'statusCode': 200,
                 'body': json.dumps({'message': 'User already exists'})
@@ -72,6 +94,8 @@ def lambda_handler(event, context):
     except Exception as e:
         print(f"Error adding conversation to DB: {e}")
         return {'statusCode': 500, 'body': json.dumps({'message': 'Error adding conversation'})}
+    
+    log_message_to_slack(phone_number, f'*Success* : {phone_number} was added.  Welcome!')
 
     try:
         data = json.dumps({"phoneNumber": phone_number, "message": question_content})
@@ -86,6 +110,7 @@ def lambda_handler(event, context):
         conn.close()
 
         if response.status != 200:
+            log_message_to_slack(phone_number, f'First message sent to {phone_number} failed.', error=True)
             raise ValueError("SMS sending failed")
     except Exception as e:
         print(f"Error sending SMS: {e}")
