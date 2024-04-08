@@ -5,6 +5,7 @@ import http.client
 import urllib
 import boto3
 import requests
+import os
 
 
 def lambda_handler(event, context):
@@ -15,7 +16,7 @@ def lambda_handler(event, context):
     conversationTable = dynamodb.Table('Conversation')
     questionTable = dynamodb.Table('Question')
 
-    CHAPTER_1_QUESTIONS = 7
+    CHAPTER_1_QUESTIONS = 3
     CHAPTER_2_QUESTIONS = 15
 
     # --- Helper Functions ---
@@ -71,10 +72,16 @@ def lambda_handler(event, context):
         finally:
             conn.close()
 
-    def send_message(phone_number, message):
+    def send_message(phone_number, message, conn=None):
         data = json.dumps({"phoneNumber": phone_number, "message": message})
         headers = {"Content-Type": "application/json"}
-        conn = http.client.HTTPSConnection("aqwgmthqlk.execute-api.us-east-2.amazonaws.com")
+
+        if conn is None:
+            conn = http.client.HTTPSConnection("aqwgmthqlk.execute-api.us-east-2.amazonaws.com")
+            close_conn = True
+        else:
+            close_conn = False
+
         try:
             conn.request("POST", "/default/smsSender-SmsHandleOutboundFunction-c1mnlkMhXvty", body=data, headers=headers)
             response = conn.getresponse()
@@ -86,7 +93,8 @@ def lambda_handler(event, context):
                 log_message_to_slack(f'Failed to send message to {phone_number}: {response.status}, {response.reason}', 'Telnyx', phone_number, error=True)
 
         finally:
-            conn.close()
+            if close_conn:
+                conn.close()
 
     def log_message_to_slack(message, source, to, mealplan=False, error=False):
         webhook_url = SLACK_WEBHOOK_URL
@@ -119,7 +127,7 @@ def lambda_handler(event, context):
             'statusCode': 200,
             'body': 'Ignored Telnyx message'
         }
-    print("Received event:", event)  # Log the raw event
+    print("Received event:", event)
     is_base64_encoded = event.get('isBase64Encoded', False)
     body = event.get('body', '')
 
@@ -168,22 +176,22 @@ def lambda_handler(event, context):
         if new_question_number > CHAPTER_1_QUESTIONS and not user.get('preliminary_meal_plan_generated'):
             meal_plan = get_meal_plan(phone_number, 'preliminary')
             print(meal_plan)
-            send_message(phone_number, meal_plan)
+            conn = http.client.HTTPSConnection("aqwgmthqlk.execute-api.us-east-2.amazonaws.com")
+            try:
+                send_message(phone_number, meal_plan[0], conn)
+                send_message(phone_number, meal_plan[1], conn)
+            finally:
+                conn.close()
 
             userTable.update_item(
                 Key={'phone_number': phone_number},
-                UpdateExpression='SET question_number = :new_question_number',
-                ExpressionAttributeValues={':new_question_number': new_question_number},
+                UpdateExpression='SET question_number = :new_question_number, preliminary_meal_plan_generated = :new_preliminary_meal_plan_generated',
+                ExpressionAttributeValues={
+                    ':new_question_number': new_question_number,
+                    ':new_preliminary_meal_plan_generated': True
+                },
                 ReturnValues='UPDATED_NEW'
             )
-            userTable.update_item(
-                Key={'phone_number': phone_number},
-                UpdateExpression='SET preliminary_meal_plan_generated = :new_preliminary_meal_plan_generated',
-                ExpressionAttributeValues={':new_preliminary_meal_plan_generated': True},
-                ReturnValues='UPDATED_NEW'
-            )
-
-            log_message_to_slack('', 'Telnyx', phone_number, mealplan=True)
 
             return {
                 'statusCode': 200,
